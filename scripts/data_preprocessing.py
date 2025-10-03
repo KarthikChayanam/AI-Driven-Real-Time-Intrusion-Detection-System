@@ -1,107 +1,103 @@
-# cn_ai/scripts/data_preprocessing.py
+# scripts/data_preprocessing.py
 
+import os
+import sys
 import pandas as pd
 import numpy as np
-from sklearn.preprocessing import StandardScaler
+from sklearn.preprocessing import StandardScaler, LabelEncoder
 from sklearn.decomposition import PCA
-import joblib
-import os
 
-# -----------------------------
-# 1. Set project paths (path-independent)
-# -----------------------------
-project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+# ---------------------------
+# Step 0: Paths relative to script
+# ---------------------------
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))  # directory of this script
+RAW_DATA_DIR = os.path.join(BASE_DIR, "../data/csvs")
+PROCESSED_DATA_DIR = os.path.join(BASE_DIR, "../data/processed")
+PROCESSED_FILE = os.path.join(PROCESSED_DATA_DIR, "cicids2017_preprocessed.csv")
 
-raw_data_dir = os.path.join(project_root, "data", "csvs")
-preprocessed_dir = os.path.join(project_root, "data", "preprocessed")
-model_dir = os.path.join(project_root, "models")
+# ---------------------------
+# Step 1: Verify CSV folder
+# ---------------------------
+if not os.path.exists(RAW_DATA_DIR):
+    print(f"[ERROR] CSV folder not found: {RAW_DATA_DIR}")
+    print("Please create the folder and add your CIC-IDS-2017 CSV files.")
+    sys.exit(1)
 
-os.makedirs(preprocessed_dir, exist_ok=True)
-os.makedirs(model_dir, exist_ok=True)
-
-# -----------------------------
-# 2. List CSV files
-# -----------------------------
-csv_files = [f for f in os.listdir(raw_data_dir) if f.endswith(".csv")]
+csv_files = [f for f in os.listdir(RAW_DATA_DIR) if f.endswith(".csv")]
 if not csv_files:
-    raise FileNotFoundError(f"No CSV files found in {raw_data_dir}")
+    print(f"[ERROR] No CSV files found in {RAW_DATA_DIR}")
+    sys.exit(1)
 
-# -----------------------------
-# 3. Process each CSV
-# -----------------------------
+print("🔹 Loading CSV files...")
+dataframes = []
 for file in csv_files:
-    print(f"Processing {file} ...")
-    df = pd.read_csv(os.path.join(raw_data_dir, file))
-    
-    # Strip whitespace from column names
-    df.columns = df.columns.str.strip()
-    
-    # -----------------------------
-    # 4. Detect label column
-    # -----------------------------
-    label_cols = [col for col in df.columns if 'label' in col.lower()]
-    if not label_cols:
-        raise ValueError(f"No label column found in {file}")
-    label_col = label_cols[0]
-    print(f"Detected label column: {label_col}")
-    
-    # Preserve multi-class labels
-    y = df[label_col].astype(str)
-    
-    # -----------------------------
-    # 5. Feature selection
-    # -----------------------------
-    selected_features = [
-        'Destination Port', 'Flow Duration', 'Total Fwd Packets', 'Total Backward Packets',
-        'Total Length of Fwd Packets', 'Total Length of Bwd Packets',
-        'Fwd Packet Length Max', 'Fwd Packet Length Min', 'Fwd Packet Length Mean', 'Fwd Packet Length Std',
-        'Bwd Packet Length Max', 'Bwd Packet Length Min', 'Bwd Packet Length Mean', 'Bwd Packet Length Std',
-        'Flow Bytes/s', 'Flow Packets/s', 'Flow IAT Mean', 'Flow IAT Std',
-        'Flow IAT Max', 'Flow IAT Min', 'Fwd IAT Total', 'Fwd IAT Mean', 'Fwd IAT Std',
-        'Fwd IAT Max', 'Fwd IAT Min', 'Bwd IAT Total', 'Bwd IAT Mean', 'Bwd IAT Std',
-        'Bwd IAT Max', 'Bwd IAT Min', 'Fwd PSH Flags', 'Bwd PSH Flags', 'Fwd URG Flags',
-        'Bwd URG Flags', 'Fwd Header Length', 'Bwd Header Length'
-    ]
-    
-    # Keep only existing features (avoid missing columns)
-    selected_features = [f for f in selected_features if f in df.columns]
-    X = df[selected_features].copy()
-    
-    # -----------------------------
-    # 6. Handle NaN / Inf / extreme values
-    # -----------------------------
-    X.replace([np.inf, -np.inf], 0, inplace=True)
-    X.fillna(0, inplace=True)
-    X = X.clip(-1e6, 1e6)  # optional: clip extreme values
-    
-    # -----------------------------
-    # 7. Feature scaling
-    # -----------------------------
-    scaler = StandardScaler()
-    X_scaled = scaler.fit_transform(X)
-    
-    # Save scaler (overwrite each time)
-    joblib.dump(scaler, os.path.join(model_dir, "scaler.pkl"))
-    
-    # -----------------------------
-    # 8. PCA for correlated features
-    # -----------------------------
-    pca = PCA(n_components=min(15, X_scaled.shape[1]))
-    X_pca = pca.fit_transform(X_scaled)
-    joblib.dump(pca, os.path.join(model_dir, "pca_transformer.pkl"))
-    
-    # -----------------------------
-    # 9. Create preprocessed DataFrame
-    # -----------------------------
-    pca_columns = [f"PCA_{i+1}" for i in range(X_pca.shape[1])]
-    df_pca = pd.DataFrame(X_pca, columns=pca_columns)
-    df_pca[label_col] = y  # preserve multi-class labels
-    
-    # -----------------------------
-    # 10. Save preprocessed CSV
-    # -----------------------------
-    output_file = os.path.join(preprocessed_dir, file)
-    df_pca.to_csv(output_file, index=False)
-    print(f"Saved preprocessed CSV to {output_file}\n")
+    path = os.path.join(RAW_DATA_DIR, file)
+    print(f"  - Reading {file}")
+    df = pd.read_csv(path)
+    dataframes.append(df)
 
-print("All CSVs processed successfully!")
+df = pd.concat(dataframes, ignore_index=True)
+print(f"✅ Combined dataset shape: {df.shape}")
+
+# ---------------------------
+# Step 2: Clean labels
+# ---------------------------
+print("🔹 Cleaning labels...")
+if " Label" in df.columns:
+    df.rename(columns={" Label": "Label"}, inplace=True)
+
+df["Label"] = df["Label"].astype(str).str.strip()  # remove extra spaces
+
+# ---------------------------
+# Step 3: Encode labels
+# ---------------------------
+print("🔹 Encoding labels...")
+label_encoder = LabelEncoder()
+df["Label"] = label_encoder.fit_transform(df["Label"])
+print(f"✅ Classes: {list(label_encoder.classes_)}")
+
+# ---------------------------
+# Step 4: Split features & labels
+# ---------------------------
+X = df.drop(columns=["Label"])
+y = df["Label"]
+
+# ---------------------------
+# Step 5: Clean infinite / NaN / extreme values
+# ---------------------------
+print("🔹 Cleaning infinite / NaN values...")
+X.replace([np.inf, -np.inf], np.nan, inplace=True)
+X.fillna(X.median(), inplace=True)
+
+# Optional: clip extreme values
+X = X.clip(lower=-1e6, upper=1e6)
+
+# ---------------------------
+# Step 6: Scale features
+# ---------------------------
+print("🔹 Scaling features...")
+scaler = StandardScaler()
+X_scaled = scaler.fit_transform(X)
+
+# ---------------------------
+# Step 7: PCA (optional)
+# ---------------------------
+USE_PCA = True
+PCA_COMPONENTS = 30
+
+if USE_PCA:
+    print(f"🔹 Applying PCA (n_components={PCA_COMPONENTS})...")
+    pca = PCA(n_components=PCA_COMPONENTS, random_state=42)
+    X_reduced = pca.fit_transform(X_scaled)
+    X_final = pd.DataFrame(X_reduced, columns=[f"PC{i+1}" for i in range(PCA_COMPONENTS)])
+    print(f"✅ PCA reduced shape: {X_final.shape}")
+else:
+    X_final = pd.DataFrame(X_scaled, columns=X.columns)
+
+# ---------------------------
+# Step 8: Save processed dataset
+# ---------------------------
+os.makedirs(PROCESSED_DATA_DIR, exist_ok=True)
+processed_df = pd.concat([X_final, y.reset_index(drop=True)], axis=1)
+processed_df.to_csv(PROCESSED_FILE, index=False)
+print(f"✅ Preprocessed dataset saved at: {PROCESSED_FILE}")
